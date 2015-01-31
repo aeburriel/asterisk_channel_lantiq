@@ -988,7 +988,7 @@ static struct ast_channel * ast_lantiq_requester(const char *type, format_t form
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_ERROR, "Unable to create channel with empty destination.\n");
 		*cause = AST_CAUSE_CHANNEL_UNACCEPTABLE;
-		return NULL;
+		goto bailout;
 	}
 
 	/* get our port number */
@@ -996,7 +996,7 @@ static struct ast_channel * ast_lantiq_requester(const char *type, format_t form
 	if (port_id < 1 || port_id > dev_ctx.channels) {
 		ast_log(LOG_ERROR, "Unknown channel ID: \"%s\"\n", (char*) data);
 		*cause = AST_CAUSE_CHANNEL_UNACCEPTABLE;
-		return NULL;
+		goto bailout;
 	}
 
 	/* on asterisk user's side, we're using port 1-2.
@@ -1010,11 +1010,11 @@ static struct ast_channel * ast_lantiq_requester(const char *type, format_t form
 	struct lantiq_pvt *pvt = &iflist[port_id];
 	if (! pvt->channel_state == ONHOOK) {
 		ast_debug(1, "TAPI channel %i alread in use.\n", port_id+1);
-		chan = NULL;
 	} else {
 		chan = lantiq_channel(AST_STATE_DOWN, port_id, NULL, NULL, format);
 	}
 
+bailout:
 	ast_mutex_unlock(&iflock);
 	return chan;
 }
