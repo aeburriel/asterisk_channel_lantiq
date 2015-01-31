@@ -71,6 +71,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: xxx $")
 #include <asterisk/musiconhold.h>
 #include <asterisk/sched.h>
 #include <asterisk/cli.h>
+#include <asterisk/devicestate.h>
 
 /* Lantiq TAPI includes */
 #include <drv_tapi/drv_tapi_io.h>
@@ -153,6 +154,7 @@ static struct ast_frame *ast_lantiq_exception(struct ast_channel *ast);
 static int ast_lantiq_indicate(struct ast_channel *chan, int condition, const void *data, size_t datalen);
 static int ast_lantiq_fixup(struct ast_channel *old, struct ast_channel *new);
 static struct ast_channel *ast_lantiq_requester(const char *type, format_t format, const struct ast_channel *requestor, void *data, int *cause);
+static int ast_lantiq_devicestate(void *data);
 static int acf_channel_read(struct ast_channel *chan, const char *funcname, char *args, char *buf, size_t buflen);
 static void lantiq_jb_get_stats(int c);
 static IFX_TAPI_COD_TYPE_t lantiq_map_asterisk_tapi(format_t formatid);
@@ -175,6 +177,7 @@ static const struct ast_channel_tech lantiq_tech = {
 	.indicate = ast_lantiq_indicate,
 	.fixup = ast_lantiq_fixup,
 	.requester = ast_lantiq_requester,
+	.devicestate = ast_lantiq_devicestate,
 	.func_channel_read = acf_channel_read
 };
 
@@ -1017,6 +1020,29 @@ static struct ast_channel * ast_lantiq_requester(const char *type, format_t form
 bailout:
 	ast_mutex_unlock(&iflock);
 	return chan;
+}
+
+static int ast_lantiq_devicestate(void *data)
+{
+	int port = atoi((char *) data) - 1;
+	if ((port < 1) || (port > dev_ctx.channels)) {
+		return AST_DEVICE_INVALID;
+	}
+
+	switch (iflist[port].channel_state) {
+		case ONHOOK:
+			return AST_DEVICE_NOT_INUSE;
+		case OFFHOOK:
+		case DIALING:
+		case INCALL:
+		case CALL_ENDED:
+			return AST_DEVICE_INUSE;
+		case RINGING:
+			return AST_DEVICE_RINGING;
+		case UNKNOWN:
+		default:
+			return AST_DEVICE_UNKNOWN;
+	}
 }
 
 static int lantiq_dev_data_handler(int c)
