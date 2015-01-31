@@ -87,6 +87,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: xxx $")
 #define TAPI_TONE_LOCALE_WAITING_CODE           37
 
 #define LANTIQ_CONTEXT_PREFIX "lantiq"
+#define DEFAULT_INTERDIGIT_TIMEOUT 2000
 
 static const char config[] = "lantiq.conf";
 
@@ -138,6 +139,7 @@ static struct lantiq_ctx {
 		int ch_fd[TAPI_AUDIO_PORT_NUM_MAX];
 		char *voip_led;                         /* VOIP LED name */
                 char *ch_led[TAPI_AUDIO_PORT_NUM_MAX];  /* FXS LED names */
+                int interdigit_timeout; /* Timeout in ms between dialed digits */
 } dev_ctx = {.voip_led = "voice", .ch_led = {"fxs1", "fxs2"}};
 
 static int ast_digit_begin(struct ast_channel *ast, char digit);
@@ -1252,11 +1254,11 @@ static void lantiq_dev_event_digit(int c, char digit)
 				/* setup autodial timer */
 				if (!pvt->dial_timer) {
 					ast_log(LOG_DEBUG, "setting new timer\n");
-					pvt->dial_timer = ast_sched_thread_add(sched_thread, 2000, lantiq_event_dial_timeout, (const void*) pvt);
+					pvt->dial_timer = ast_sched_thread_add(sched_thread, dev_ctx.interdigit_timeout, lantiq_event_dial_timeout, (const void*) pvt);
 				} else {
 					ast_log(LOG_DEBUG, "replacing timer\n");
 					struct sched_context *sched = ast_sched_thread_get_context(sched_thread);
-					AST_SCHED_REPLACE(pvt->dial_timer, sched, 2000, lantiq_event_dial_timeout, (const void*) pvt);
+					AST_SCHED_REPLACE(pvt->dial_timer, sched, dev_ctx.interdigit_timeout, lantiq_event_dial_timeout, (const void*) pvt);
 				}
 			}
 			break;
@@ -1561,6 +1563,7 @@ static int load_module(void)
 	int cid_type = IFX_TAPI_CID_STD_TELCORDIA;
 	int vad_type = IFX_TAPI_ENC_VAD_NOVAD;
 	dev_ctx.channels = TAPI_AUDIO_PORT_NUM_MAX;
+	dev_ctx.interdigit_timeout = DEFAULT_INTERDIGIT_TIMEOUT;
 	struct ast_flags config_flags = { 0 };
 	int c;
 
@@ -1741,6 +1744,13 @@ static int load_module(void)
 				ast_log(LOG_ERROR, "Unknown voice activity detection value '%s'\n", v->value);
 				ast_config_destroy(cfg);
 				return AST_MODULE_LOAD_DECLINE;
+			}
+		} else if (!strcasecmp(v->name, "interdigit")) {
+			dev_ctx.interdigit_timeout = atoi(v->value);
+			ast_log(LOG_DEBUG, "Setting interdigit timeout to %s.\n", v->value);
+			if (!dev_ctx.interdigit_timeout) {
+				dev_ctx.interdigit_timeout = DEFAULT_INTERDIGIT_TIMEOUT;
+				ast_log(LOG_WARNING, "Invalid interdigit timeout: %s, using default.\n", v->value);
 			}
 		}
 	}
