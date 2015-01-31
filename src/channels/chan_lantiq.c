@@ -253,7 +253,7 @@ static int lantiq_dev_open(const char *dev_path, const int32_t ch_num)
 	return open((const char*)dev_name, O_RDWR, 0644);
 }
 
-static void lantiq_ring(int c, int r, const char *cid)
+static void lantiq_ring(int c, int r, const char *cid, const char *name)
 {
 	uint8_t status;
 
@@ -262,19 +262,38 @@ static void lantiq_ring(int c, int r, const char *cid)
 			status = (uint8_t) ioctl(dev_ctx.ch_fd[c], IFX_TAPI_RING_START, 0);
 		} else {
 			IFX_TAPI_CID_MSG_t msg;
-			IFX_TAPI_CID_MSG_STRING_t cid_el;
+			IFX_TAPI_CID_MSG_ELEMENT_t elements[3];
+			int count = 0;
+			time_t timestamp;
+			struct tm *tm;
 
-			memset(&msg, 0, sizeof(msg));
-			memset(&cid_el, 0, sizeof(cid_el));
-			
-			cid_el.elementType = IFX_TAPI_CID_ST_CLI;
-			cid_el.len = strlen(cid);
-			strncpy((char*)cid_el.element, cid, (size_t)cid_el.len);
+			elements[count].string.elementType = IFX_TAPI_CID_ST_CLI;
+			elements[count].string.len = strlen(cid);
+			if (elements[count].string.len > IFX_TAPI_CID_MSG_LEN_MAX) {
+				elements[count].string.len = IFX_TAPI_CID_MSG_LEN_MAX;
+			}
+			strncpy((char *)elements[count++].string.element, cid, IFX_TAPI_CID_MSG_LEN_MAX);
+
+			elements[count].string.elementType = IFX_TAPI_CID_ST_NAME;
+			elements[count].string.len = strlen(name);
+			if (elements[count].string.len > IFX_TAPI_CID_MSG_LEN_MAX) {
+				elements[count].string.len = IFX_TAPI_CID_MSG_LEN_MAX;
+			}
+			strncpy((char *)elements[count++].string.element, name, IFX_TAPI_CID_MSG_LEN_MAX);
+
+			if ((time(&timestamp) != -1) && ((tm=localtime(&timestamp)) != NULL)) {
+				elements[count].date.elementType = IFX_TAPI_CID_ST_DATE;
+				elements[count].date.day = tm->tm_mday;
+				elements[count].date.month = tm->tm_mon;
+				elements[count].date.hour = tm->tm_hour;
+				elements[count].date.mn = tm->tm_min;
+				count++;
+			}
 
 			msg.txMode = IFX_TAPI_CID_HM_ONHOOK;
 			msg.messageType = IFX_TAPI_CID_MT_CSUP;
-			msg.message = (IFX_TAPI_CID_MSG_ELEMENT_t *)&cid_el;
-			msg.nMsgElements = 1;
+			msg.message = elements;
+			msg.nMsgElements = count;
 
 			status = (uint8_t) ioctl(dev_ctx.ch_fd[c], IFX_TAPI_CID_TX_SEQ_START, (IFX_int32_t) &msg);
 		}
@@ -495,10 +514,11 @@ static int ast_lantiq_call(struct ast_channel *ast, char *dest, int timeout)
 	if (pvt->channel_state == ONHOOK) {
 		ast_log(LOG_DEBUG, "port %i is ringing\n", pvt->port_id);
 
-		char *cid = ast->connected.id.number.valid ? ast->connected.id.number.str : NULL;
-		ast_log(LOG_DEBUG, "port %i CID: %s\n", pvt->port_id, cid ? cid : "none");
+		const char *cid = ast->connected.id.number.valid ? ast->connected.id.number.str : NULL;
+		const char *name = ast->connected.id.name.valid ? ast->connected.id.name.str : NULL;
+		ast_log(LOG_DEBUG, "port %i CID: %s <%s>\n", pvt->port_id, cid ? cid : "none", name ? name : "");
 
-		lantiq_ring(pvt->port_id, 1, cid);
+		lantiq_ring(pvt->port_id, 1, cid, name);
 		pvt->channel_state = RINGING;
 
 		ast_setstate(ast, AST_STATE_RINGING);
@@ -531,7 +551,7 @@ static int ast_lantiq_hangup(struct ast_channel *ast)
 	switch (pvt->channel_state) {
 		case RINGING:
 		case ONHOOK: 
-			lantiq_ring(pvt->port_id, 0, NULL);
+			lantiq_ring(pvt->port_id, 0, NULL, NULL);
 			pvt->channel_state = ONHOOK;
 			break;
 		default:
