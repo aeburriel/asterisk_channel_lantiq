@@ -150,14 +150,15 @@ static int ast_lantiq_fixup(struct ast_channel *old, struct ast_channel *new);
 static struct ast_channel *ast_lantiq_requester(const char *type, format_t format, const struct ast_channel *requestor, void *data, int *cause);
 static int acf_channel_read(struct ast_channel *chan, const char *funcname, char *args, char *buf, size_t buflen);
 static void lantiq_jb_get_stats(int c);
-static int lantiq_map_rtp_id(int formatid);
-static int lantiq_conf_enc(int c, int formatid);
+static IFX_TAPI_COD_TYPE_t lantiq_map_asterisk_tapi(format_t formatid);
+static char lantiq_map_asterisk_rtp(format_t formatid);
+static format_t lantiq_map_rtp_asterisk(char rtpid);
+static int lantiq_conf_enc(int c, IFX_TAPI_COD_TYPE_t tapi_codec);
 
 static const struct ast_channel_tech lantiq_tech = {
 	.type = "TAPI",
 	.description = "Lantiq TAPI Telephony API Driver",
-	//.capabilities = AST_FORMAT_G729A | AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_G726 | AST_FORMAT_ILBC | AST_FORMAT_SLINEAR | AST_FORMAT_SLINEAR16 | AST_FORMAT_G722 | AST_FORMAT_SIREN7,
-	.capabilities = AST_FORMAT_G729A | AST_FORMAT_ALAW | AST_FORMAT_ULAW | AST_FORMAT_G726 | AST_FORMAT_ILBC | AST_FORMAT_SLINEAR,
+	.capabilities = AST_FORMAT_G729A | AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_G726 | AST_FORMAT_ILBC | AST_FORMAT_SLINEAR | AST_FORMAT_SLINEAR16 | AST_FORMAT_G722 | AST_FORMAT_SIREN7,
 	.send_digit_begin = ast_digit_begin,
 	.send_digit_end = ast_digit_end,
 	.call = ast_lantiq_call,
@@ -212,6 +213,22 @@ typedef struct rtp_header
   uint32_t timestamp;
   uint32_t ssrc;
 } rtp_header_t;
+/* Internal RTP payload types - standard */
+#define RTP_PCMU	0
+#define RTP_G723	4
+#define RTP_PCMA	8
+#define RTP_G722	9
+#define RTP_CN		13
+#define RTP_G729	18
+/* Internal RTP payload types - custom   */
+#define RTP_G7221	100
+#define RTP_G726	101
+#define RTP_ILBC	102
+#define RTP_SLIN8	103
+#define RTP_SLIN16	104
+#define RTP_SIREN7	105
+#define RTP_UNSUP	127
+
 
 static uint32_t now(void) {
 	struct timespec ts;
@@ -540,7 +557,7 @@ static int ast_lantiq_answer(struct ast_channel *ast)
 	ast_log(LOG_DEBUG, "Remote end has answered call.\n");
 	struct lantiq_pvt *pvt = ast->tech_pvt;
 
-	lantiq_conf_enc(pvt->port_id, lantiq_map_rtp_id((int)ast->writeformat));
+	lantiq_conf_enc(pvt->port_id, lantiq_map_asterisk_tapi(ast->writeformat));
 
 	pvt->call_answer = epoch();
 	return 0;
@@ -552,7 +569,7 @@ static struct ast_frame * ast_lantiq_read(struct ast_channel *ast)
 	return NULL;
 }
 
-static int lantiq_map_rtp_id(int formatid)
+static IFX_TAPI_COD_TYPE_t lantiq_map_asterisk_tapi(format_t formatid)
 {
 	switch (formatid) {
 		//case AST_FORMAT_G723_1: return IFX_TAPI_COD_TYPE_G723_63;
@@ -567,23 +584,60 @@ static int lantiq_map_rtp_id(int formatid)
 		case AST_FORMAT_G722: return IFX_TAPI_COD_TYPE_G722_64;
 		case AST_FORMAT_SIREN7: return IFX_TAPI_COD_TYPE_G7221_32;
 		default:
-		{
-			ast_log(LOG_ERROR, "format received is %d, forcing alaw\n", formatid);
-			return IFX_TAPI_COD_TYPE_MLAW;
-		}
+			ast_log(LOG_ERROR, "format received is %llu, forcing alaw\n", formatid);
+			return IFX_TAPI_COD_TYPE_ALAW;
 	}
 }
 
-static int lantiq_conf_enc(int c, int formatid)
+static char lantiq_map_asterisk_rtp(format_t formatid)
+{
+	switch (formatid) {
+		case AST_FORMAT_G723_1: return RTP_G723;
+		case AST_FORMAT_G729A: return RTP_G729;
+		case AST_FORMAT_ULAW: return RTP_PCMU;
+		case AST_FORMAT_ALAW: return RTP_PCMA;
+		case AST_FORMAT_G726: return RTP_G726;
+		case AST_FORMAT_ILBC: return RTP_ILBC;
+		case AST_FORMAT_SLINEAR: return RTP_SLIN8;
+		case AST_FORMAT_SLINEAR16: return RTP_SLIN16;
+		case AST_FORMAT_G722: return RTP_G722;
+		case AST_FORMAT_SIREN7: return RTP_SIREN7;
+		default:
+			ast_log(LOG_ERROR, "unsupported format %s, returning UNSUPPORTED\n", ast_getformatname(formatid));
+			return RTP_UNSUP;
+	}
+}
+
+static format_t lantiq_map_rtp_asterisk(char rtpid)
+{
+	switch (rtpid) {
+		case RTP_G723: return AST_FORMAT_G723_1;
+		case RTP_G729: return AST_FORMAT_G729A;
+		case RTP_PCMU: return AST_FORMAT_ULAW;
+		case RTP_PCMA: return AST_FORMAT_ALAW;
+		case RTP_G726: return AST_FORMAT_G726;
+		case RTP_ILBC: return AST_FORMAT_ILBC;
+		case RTP_SLIN8: return AST_FORMAT_SLINEAR;
+		case RTP_SLIN16: return AST_FORMAT_SLINEAR16;
+		case RTP_G722: return AST_FORMAT_G722;
+		case RTP_SIREN7: return AST_FORMAT_SIREN7;
+		case RTP_CN: return 0;	/* TODO: handle Comfort Noise frames */
+		default:
+			ast_log(LOG_ERROR, "unsupported RTP type %d, returning UNSUPPORTED\n", rtpid);
+			return 0;
+	}
+}
+
+static int lantiq_conf_enc(int c, IFX_TAPI_COD_TYPE_t tapi_codec)
 {
 	/* Configure encoder before starting rtp session */
-	ast_log(LOG_DEBUG, "Configuring encoder to use tapi codec type %d on channel %i\n", formatid, c);
+	ast_log(LOG_DEBUG, "Configuring encoder to use tapi codec type %d on channel %i\n", tapi_codec, c);
 
 	IFX_TAPI_ENC_CFG_t enc_cfg;
 
 	memset(&enc_cfg, 0x0, sizeof(IFX_TAPI_ENC_CFG_t));
 	enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
-	enc_cfg.nEncType = formatid;
+	enc_cfg.nEncType = tapi_codec;
 
 	if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_ENC_CFG_SET, &enc_cfg)) {
 		ast_log(LOG_ERROR, "IFX_TAPI_ENC_CFG_SET %d failed\n", c);
@@ -627,9 +681,13 @@ static int ast_lantiq_write(struct ast_channel *ast, struct ast_frame *frame)
 	rtp_header->timestamp    = pvt->rtp_timestamp;
 	rtp_header->seqno        = pvt->rtp_seqno++;
 	rtp_header->ssrc         = 0;
-	rtp_header->payload_type = (uint8_t) frame->subclass.codec;
+	rtp_header->payload_type = lantiq_map_asterisk_rtp(frame->subclass.codec);
+	if (rtp_header->payload_type == RTP_UNSUP) {
+		ast_debug(1, "TAPI: ast_lantiq_write(): dropping unsupported voice frame.\n");
+		return 0;
+	}
 
-	pvt->rtp_timestamp += 160;
+	pvt->rtp_timestamp += (rtp_header->payload_type == RTP_G722 ? ast_codec_get_samples(frame) / 2 : ast_codec_get_samples(frame));	/* per RFC3551 */
 
 	memcpy(buf+RTP_HEADER_LEN, frame->data.ptr, frame->datalen);
 
@@ -822,7 +880,7 @@ static struct ast_channel * lantiq_channel(int state, int c, char *ext, char *ct
 	pvt->owner = chan;
 
 	if (format != 0)
-		lantiq_conf_enc(c, lantiq_map_rtp_id((int)format));
+		lantiq_conf_enc(c, lantiq_map_asterisk_tapi(format));
 
 	return chan;
 }
@@ -879,16 +937,23 @@ static int lantiq_dev_data_handler(int c)
 	struct ast_frame frame = {0};
 
 	int res = read(dev_ctx.ch_fd[c], buf, sizeof(buf));
-	if (res <= 0) ast_log(LOG_ERROR, "we got read error %i\n", res);
+	if (res <= 0) {
+		ast_log(LOG_ERROR, "we got read error %i\n", res);
+		return 0;
+	}
 	
 	rtp_header_t *rtp = (rtp_header_t*) buf;
 
 	frame.src = "TAPI";
 	frame.frametype = AST_FRAME_VOICE;
-	frame.subclass.codec = rtp->payload_type;
-	frame.samples = res - RTP_HEADER_LEN;
+	frame.subclass.codec = lantiq_map_rtp_asterisk(rtp->payload_type);
+	if (frame.subclass.codec == 0) {
+		ast_debug(1, "TAPI: lantiq_dev_data_handler(): dropping unsupported voice frame.\n");
+		return 0;
+	}
 	frame.datalen = res - RTP_HEADER_LEN;
 	frame.data.ptr = buf + RTP_HEADER_LEN;
+	frame.samples = ast_codec_get_samples(&frame);
 
 	struct lantiq_pvt *pvt = (struct lantiq_pvt *) &iflist[c];
 	if (pvt->owner && (pvt->owner->_state == AST_STATE_UP)) {
@@ -1362,29 +1427,17 @@ static int lantiq_setup_rtp(int c)
 
 	memset((char*)&rtpPTConf, '\0', sizeof(rtpPTConf));
 
-//	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_63] = AST_FORMAT_G723_1;
-//	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_53] = 4;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G729] = AST_FORMAT_G729A;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_MLAW] = AST_FORMAT_ULAW;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_ALAW] = AST_FORMAT_ALAW;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G726_32] = AST_FORMAT_G726;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_ILBC_152] = AST_FORMAT_ILBC;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_LIN16_8] = AST_FORMAT_SLINEAR;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_LIN16_16] = AST_FORMAT_SLINEAR16;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G722_64] = AST_FORMAT_G722;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G7221_32] = AST_FORMAT_SIREN7;
-
-//	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_63] = AST_FORMAT_G723_1;
-//	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_53] = 4;
-	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G729] = AST_FORMAT_G729A;
-	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_MLAW] = AST_FORMAT_ULAW;
-	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_ALAW] = AST_FORMAT_ALAW;
-	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G726_32] = AST_FORMAT_G726;
-	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_ILBC_152] = AST_FORMAT_ILBC;
-	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_LIN16_8] = AST_FORMAT_SLINEAR;
-	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_LIN16_16] = AST_FORMAT_SLINEAR16;
-	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G722_64] = AST_FORMAT_G722;
-	rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G7221_32] = AST_FORMAT_SIREN7;
+//	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_63] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_63] = AST_FORMAT_G723_1;
+//	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_53] = tpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_53] = 4;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G729] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G729] = RTP_G729;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_MLAW] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_MLAW] = RTP_PCMU;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_ALAW] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_ALAW] = RTP_PCMA;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G726_32] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G726_32] = RTP_G726;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_ILBC_152] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_ILBC_152] = RTP_ILBC;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_LIN16_8] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_LIN16_8] = RTP_SLIN8;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_LIN16_16] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_LIN16_16] = RTP_SLIN16;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G722_64] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G722_64] = RTP_G722;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G7221_32] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G7221_32] = RTP_G7221;
 
 	int ret;
 	if ((ret = ioctl(dev_ctx.ch_fd[c], IFX_TAPI_PKT_RTP_PT_CFG_SET, (IFX_int32_t) &rtpPTConf))) {
@@ -1757,7 +1810,7 @@ static int load_module(void)
 			return AST_MODULE_LOAD_FAILURE;
 		}
 
-		/* Setup TAPI <-> Asterisk codec type mapping */
+		/* Setup TAPI <-> internal RTP codec type mapping */
 		if (lantiq_setup_rtp(c)) {
 			return AST_MODULE_LOAD_FAILURE;
 		}
