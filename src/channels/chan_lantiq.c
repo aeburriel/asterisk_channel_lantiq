@@ -53,6 +53,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: xxx $")
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <signal.h>
+#include <stdio.h>
 #ifdef HAVE_LINUX_COMPILER_H
 #include <linux/compiler.h>
 #endif
@@ -135,7 +136,9 @@ static struct lantiq_ctx {
 		int dev_fd;
 		int channels;
 		int ch_fd[TAPI_AUDIO_PORT_NUM_MAX];
-} dev_ctx;
+		char *voip_led;                         /* VOIP LED name */
+                char *ch_led[TAPI_AUDIO_PORT_NUM_MAX];  /* FXS LED names */
+} dev_ctx = {.voip_led = "voice", .ch_led = {"fxs1", "fxs2"}};
 
 static int ast_digit_begin(struct ast_channel *ast, char digit);
 static int ast_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
@@ -230,6 +233,67 @@ typedef struct rtp_header
 #define RTP_UNSUP	127
 
 
+/* LED Control. Taken with modifications from SVD by Luca Olivetti <olivluca@gmail.com> */
+#define LED_SLOW_BLINK	1000
+#define LED_FAST_BLINK	100
+static FILE *led_open(const char *led, char* sub)
+{
+	char fname[100];
+
+	if (snprintf(fname, sizeof(fname), "/sys/class/leds/%s/%s", led, sub) >= sizeof(fname))
+		return NULL;
+	return fopen(fname, "r+");
+}
+
+static FILE *led_trigger(const char *led)
+{
+	return led_open(led, "trigger");
+}
+
+static void led_delay(const char *led, int onoff, int msec)
+{
+	FILE *fp = led_open(led, onoff ? "delay_on" : "delay_off");
+	if (fp) {
+		fprintf(fp,"%d\n",msec);
+		fclose(fp);
+	}
+}
+
+static void led_on(const char *led)
+{
+	FILE *fp;
+
+	fp = led_trigger(led);
+	if (fp) {
+		fprintf(fp,"default-on\n");
+		fclose(fp);
+	}
+}
+
+static void led_off(const char *led)
+{
+	FILE *fp;
+
+	fp = led_trigger(led);
+	if (fp) {
+		fprintf(fp,"none\n");
+		fclose(fp);
+	}
+}
+
+static void led_blink(const char *led, int period)
+{
+	FILE *fp;
+
+	fp = led_trigger(led);
+	if (fp) {
+		fprintf(fp, "timer\n");
+		fclose(fp);
+		led_delay(led, 1, period/2);
+		led_delay(led, 0, period/2);
+	}
+}
+
 static uint32_t now(void) {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -258,6 +322,7 @@ static void lantiq_ring(int c, int r, const char *cid, const char *name)
 	uint8_t status;
 
 	if (r) {
+		led_blink(dev_ctx.ch_led[c], LED_FAST_BLINK);
 		if (!cid) {
 			status = (uint8_t) ioctl(dev_ctx.ch_fd[c], IFX_TAPI_RING_START, 0);
 		} else {
@@ -299,6 +364,7 @@ static void lantiq_ring(int c, int r, const char *cid, const char *name)
 		}
 	} else {
 		status = (uint8_t) ioctl(dev_ctx.ch_fd[c], IFX_TAPI_RING_STOP, 0);
+		led_off(dev_ctx.ch_led[c]);
 	}
 
 	if (status) {
@@ -1045,6 +1111,7 @@ static int lantiq_dev_event_hook(int c, int state)
 
 		/* stop DSP data feed */
 		lantiq_standby(c);
+		led_off(dev_ctx.ch_led[c]);
 
 	} else { /* going offhook */
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_LINE_FEED_SET, IFX_TAPI_LINE_FEED_ACTIVE)) {
@@ -1055,11 +1122,13 @@ static int lantiq_dev_event_hook(int c, int state)
 		switch (iflist[c].channel_state) {
 			case RINGING: 
 				ret = accept_call(c);
+				led_blink(dev_ctx.ch_led[c], LED_SLOW_BLINK);
 				break;
 			default:
 				iflist[c].channel_state = OFFHOOK;
 				lantiq_play_tone(c, TAPI_TONE_LOCALE_DIAL_CODE);
 				ret = 0;
+				led_on(dev_ctx.ch_led[c]);
 				break;
 		}
 
@@ -1164,6 +1233,7 @@ static void lantiq_dev_event_digit(int c, char digit)
 			pvt->channel_state = DIALING;
 
 			lantiq_play_tone(c, TAPI_TONE_LOCALE_NONE);
+			led_blink(dev_ctx.ch_led[c], LED_SLOW_BLINK);
 
 			/* fall through */
 		case DIALING: 
@@ -1347,6 +1417,7 @@ static void lantiq_cleanup(void)
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_DEC_STOP, 0)) {
 			ast_log(LOG_WARNING, "IFX_TAPI_DEC_STOP ioctl failed\n");
 		}
+		led_off(dev_ctx.ch_led[c]);
 	}
 
 	if (ioctl(dev_ctx.dev_fd, IFX_TAPI_DEV_STOP, 0)) {
@@ -1354,6 +1425,7 @@ static void lantiq_cleanup(void)
 	}
 
 	close(dev_ctx.dev_fd);
+	led_off(dev_ctx.voip_led);
 }
 
 static int unload_module(void)
@@ -1490,7 +1562,13 @@ static int load_module(void)
 	int vad_type = IFX_TAPI_ENC_VAD_NOVAD;
 	dev_ctx.channels = TAPI_AUDIO_PORT_NUM_MAX;
 	struct ast_flags config_flags = { 0 };
-	
+	int c;
+
+	/* Turn off the LEDs, just in case */
+	led_off(dev_ctx.voip_led);
+	for(c = 0; c < TAPI_AUDIO_PORT_NUM_MAX; c++)
+		led_off(dev_ctx.ch_led[c]);
+
 	if (!(sched_thread = ast_sched_thread_create())) {
 		ast_log(LOG_ERROR, "Unable to create scheduler thread\n");
 		return AST_MODULE_LOAD_FAILURE;
@@ -1689,7 +1767,6 @@ static int load_module(void)
 	IFX_TAPI_WLEC_CFG_t wlec_cfg;
 	IFX_TAPI_JB_CFG_t jb_cfg;
 	IFX_TAPI_CID_CFG_t cid_cfg;
-	uint8_t c;
 
 	/* open device */
 	dev_ctx.dev_fd = lantiq_dev_open(base_path, 0);
@@ -1847,6 +1924,7 @@ static int load_module(void)
 	ast_register_atexit(lantiq_cleanup);
 
 	restart_monitor();
+	led_on(dev_ctx.voip_led);
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
