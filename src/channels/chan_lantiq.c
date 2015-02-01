@@ -190,9 +190,6 @@ AST_MUTEX_DEFINE_STATIC(iflock);
  */
 AST_MUTEX_DEFINE_STATIC(monlock);
 
-/* Boolean value whether the monitoring thread shall continue. */
-static unsigned int monitor;
-
 /* The scheduling thread */
 struct ast_sched_thread *sched_thread;
    
@@ -1352,38 +1349,35 @@ static void * lantiq_events_monitor(void *data)
 {
 	ast_verbose("TAPI thread started\n");
 
-	struct pollfd fds[3];
+	struct pollfd fds[TAPI_AUDIO_PORT_NUM_MAX + 1];
+	int c;
 
 	fds[0].fd = dev_ctx.dev_fd;
 	fds[0].events = POLLIN;
-	fds[1].fd = dev_ctx.ch_fd[0];
-	fds[1].events = POLLIN;
-	fds[2].fd = dev_ctx.ch_fd[1];
-	fds[2].events = POLLIN;
+	for (c = 0; c < dev_ctx.channels; c++) {
+		fds[c + 1].fd = dev_ctx.ch_fd[c];
+		fds[c + 1].events = POLLIN;
+	}
 
-	while (monitor) {
-		ast_mutex_lock(&monlock);
-
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+	for (;;) {
 		if (poll(fds, dev_ctx.channels + 1, 2000) <= 0) {
-			ast_mutex_unlock(&monlock);
 			continue;
 		}
 
+		ast_mutex_lock(&monlock);
 		if (fds[0].revents & POLLIN) {
 			lantiq_dev_event_handler();
 		}
 
+		for (c = 0; c < dev_ctx.channels; c++) {
+			if ((fds[c + 1].revents & POLLIN) && (lantiq_dev_data_handler(c))) {
+				ast_log(LOG_ERROR, "data handler %d failed\n", c);
+				ast_mutex_unlock(&monlock);
+				break;
+			}
+		}
 		ast_mutex_unlock(&monlock);
-
-		if ((fds[1].revents & POLLIN) && (lantiq_dev_data_handler(0))) {
-			ast_log(LOG_ERROR, "data handler 0 failed\n");
-			break;
-		}
-
-		if ((fds[2].revents & POLLIN) && (lantiq_dev_data_handler(1))) {
-			ast_log(LOG_ERROR, "data handler 1 failed\n");
-			break;
-		}
 	}
 
 	return NULL;
@@ -1404,26 +1398,16 @@ static int restart_monitor(void)
 	}
 
 	if (monitor_thread != AST_PTHREADT_NULL) {
-		if (ast_mutex_lock(&iflock)) {
+		/* Wake up the thread */
+		pthread_kill(monitor_thread, SIGURG);
+	} else {
+		/* Start a new monitor */
+		if (ast_pthread_create_background(&monitor_thread, NULL, lantiq_events_monitor, NULL) < 0) {
 			ast_mutex_unlock(&monlock);
-			ast_log(LOG_WARNING, "Unable to lock the interface list\n");
+			ast_log(LOG_WARNING, "Unable to start monitor thread.\n");
 			return -1;
 		}
-		monitor = 0;
-		while (pthread_kill(monitor_thread, SIGURG) == 0)
-			sched_yield();
-		pthread_join(monitor_thread, NULL);
-		ast_mutex_unlock(&iflock);
 	}
-
-	monitor = 1;
-	/* Start a new monitor */
-	if (ast_pthread_create_background(&monitor_thread, NULL, lantiq_events_monitor, NULL) < 0) {
-		ast_mutex_unlock(&monlock);
-		ast_log(LOG_ERROR, "Unable to start monitor thread.\n");
-		return -1;
-	}
-
 	ast_mutex_unlock(&monlock);
 
 	return 0;
@@ -1432,6 +1416,10 @@ static int restart_monitor(void)
 static void lantiq_cleanup(void)
 {
 	int c;
+
+	if (dev_ctx.dev_fd < 0) {
+		return;
+	}
 
 	for (c = 0; c < dev_ctx.channels ; c++) { 
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_LINE_FEED_SET, IFX_TAPI_LINE_FEED_STANDBY)) {
@@ -1453,6 +1441,7 @@ static void lantiq_cleanup(void)
 	}
 
 	close(dev_ctx.dev_fd);
+	dev_ctx.dev_fd = -1;
 	led_off(dev_ctx.voip_led);
 }
 
@@ -1462,30 +1451,38 @@ static int unload_module(void)
 
 	ast_channel_unregister(&lantiq_tech);
 
-	if (!ast_mutex_lock(&iflock)) {
-		for (c = 0; c < dev_ctx.channels ; c++) {
-			if (iflist[c].owner)
-				ast_softhangup(iflist[c].owner, AST_SOFTHANGUP_APPUNLOAD);
-		}
-		ast_mutex_unlock(&iflock);
-	} else {
+	if (ast_mutex_lock(&iflock)) {
+		ast_log(LOG_WARNING, "Unable to lock the interface list\n");
+		return -1;
+	}
+	for (c = 0; c < dev_ctx.channels ; c++) {
+		if (iflist[c].owner)
+			ast_softhangup(iflist[c].owner, AST_SOFTHANGUP_APPUNLOAD);
+	}
+	ast_mutex_unlock(&iflock);
+
+	if (ast_mutex_lock(&monlock)) {
 		ast_log(LOG_WARNING, "Unable to lock the monitor\n");
 		return -1;
 	}
-
-	if (!ast_mutex_lock(&monlock)) {
-		if (monitor_thread > AST_PTHREADT_NULL) {
-			monitor = 0;
-			while (pthread_kill(monitor_thread, SIGURG) == 0)
-				sched_yield();
-			pthread_join(monitor_thread, NULL);
-		}
+	if (monitor_thread && (monitor_thread != AST_PTHREADT_STOP) && (monitor_thread != AST_PTHREADT_NULL)) {
+		pthread_t th = monitor_thread;
+		monitor_thread = AST_PTHREADT_STOP;
+		pthread_cancel(th);
+		pthread_kill(th, SIGURG);
+		ast_mutex_unlock(&monlock);
+		pthread_join(th, NULL);
+	} else {
 		monitor_thread = AST_PTHREADT_STOP;
 		ast_mutex_unlock(&monlock);
-	} else {
-		ast_log(LOG_WARNING, "Unable to lock the monitor\n");
-		return -1;
 	}
+
+	sched_thread = ast_sched_thread_destroy(sched_thread);
+	ast_mutex_destroy(&iflock);
+	ast_mutex_destroy(&monlock);
+
+	lantiq_cleanup();
+	ast_free(iflist);
 
 	return 0;
 }
@@ -1522,22 +1519,22 @@ static int lantiq_create_pvts(void)
 
 	iflist = ast_calloc(1, sizeof(struct lantiq_pvt) * dev_ctx.channels);
 
-	if (iflist) { 
-		for (i=0 ; i<dev_ctx.channels ; i++) {
-			lantiq_init_pvt(&iflist[i]);
-			iflist[i].port_id = i;
-			if (per_channel_context) {
-				snprintf(iflist[i].context, AST_MAX_CONTEXT, "%s%i", LANTIQ_CONTEXT_PREFIX, i+1);
-				ast_debug(1, "Context for channel %i: %s\n", i, iflist[i].context);
-			} else {
-				snprintf(iflist[i].context, AST_MAX_CONTEXT, "default");
-			}
-		}
-		return 0;
-	} else {
+	if (!iflist) {
 		ast_log(LOG_ERROR, "unable to allocate memory\n");
 		return -1;
 	}
+
+	for (i = 0; i < dev_ctx.channels; i++) {
+		lantiq_init_pvt(&iflist[i]);
+		iflist[i].port_id = i;
+		if (per_channel_context) {
+			snprintf(iflist[i].context, AST_MAX_CONTEXT, "%s%i", LANTIQ_CONTEXT_PREFIX, i + 1);
+			ast_debug(1, "Context for channel %i: %s\n", i, iflist[i].context);
+		} else {
+			snprintf(iflist[i].context, AST_MAX_CONTEXT, "default");
+		}
+	}
+	return 0;
 }
 
 static int lantiq_setup_rtp(int c)
@@ -1588,6 +1585,7 @@ static int load_module(void)
 	int jb_maxsize = 0x5a0;
 	int cid_type = IFX_TAPI_CID_STD_TELCORDIA;
 	int vad_type = IFX_TAPI_ENC_VAD_NOVAD;
+	dev_ctx.dev_fd = -1;
 	dev_ctx.channels = TAPI_AUDIO_PORT_NUM_MAX;
 	dev_ctx.interdigit_timeout = DEFAULT_INTERDIGIT_TIMEOUT;
 	struct ast_flags config_flags = { 0 };
@@ -1597,11 +1595,6 @@ static int load_module(void)
 	led_off(dev_ctx.voip_led);
 	for(c = 0; c < TAPI_AUDIO_PORT_NUM_MAX; c++)
 		led_off(dev_ctx.ch_led[c]);
-
-	if (!(sched_thread = ast_sched_thread_create())) {
-		ast_log(LOG_ERROR, "Unable to create scheduler thread\n");
-		return AST_MODULE_LOAD_FAILURE;
-	}
 
 	if ((cfg = ast_config_load(config, config_flags)) == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", config);
@@ -1616,7 +1609,7 @@ static int load_module(void)
 
 	if (ast_mutex_lock(&iflock)) {
 		ast_log(LOG_ERROR, "Unable to lock interface list.\n");
-		return AST_MODULE_LOAD_FAILURE;
+		goto cfg_error;
 	}
 
 	for (v = ast_variable_browse(cfg, "interfaces"); v; v = v->next) {
@@ -1624,8 +1617,7 @@ static int load_module(void)
 			dev_ctx.channels = atoi(v->value);
 			if (!dev_ctx.channels) {
 				ast_log(LOG_ERROR, "Invalid value for channels in config %s\n", config);
-				ast_config_destroy(cfg);
-				return AST_MODULE_LOAD_DECLINE;
+				goto cfg_error_il;
 			}
 		} else if (!strcasecmp(v->name, "firmwarefilename")) {
 			ast_copy_string(firmware_filename, v->value, sizeof(firmware_filename));
@@ -1640,8 +1632,7 @@ static int load_module(void)
 				per_channel_context = 0;
 			} else {
 				ast_log(LOG_ERROR, "Unknown per_channel_context value '%s'. Try 'on' or 'off'.\n", v->value);
-				ast_config_destroy(cfg);
-				return AST_MODULE_LOAD_DECLINE;
+				goto cfg_error_il;
 			}
 		}
 	}
@@ -1685,8 +1676,7 @@ static int load_module(void)
 			} else {
 				wlec_type = IFX_TAPI_WLEC_TYPE_OFF;
 				ast_log(LOG_ERROR, "Unknown echo cancellation type '%s'\n", v->value);
-				ast_config_destroy(cfg);
-				return AST_MODULE_LOAD_DECLINE;
+				goto cfg_error_il;
 			}
 		} else if (!strcasecmp(v->name, "echocancelnlp")) {
 			if (!strcasecmp(v->value, "on")) {
@@ -1695,8 +1685,7 @@ static int load_module(void)
 				wlec_nlp = IFX_TAPI_WLEC_NLP_OFF;
 			} else {
 				ast_log(LOG_ERROR, "Unknown echo cancellation nlp '%s'\n", v->value);
-				ast_config_destroy(cfg);
-				return AST_MODULE_LOAD_DECLINE;
+				goto cfg_error_il;
 			}
 		} else if (!strcasecmp(v->name, "jitterbuffertype")) {
 			if (!strcasecmp(v->value, "fixed")) {
@@ -1721,8 +1710,7 @@ static int load_module(void)
 				}
 			} else {
 				ast_log(LOG_ERROR, "Unknown jitter buffer type '%s'\n", v->value);
-				ast_config_destroy(cfg);
-				return AST_MODULE_LOAD_DECLINE;
+				goto cfg_error_il;
 			}
 		} else if (!strcasecmp(v->name, "jitterbufferpackettype")) {
 			if (!strcasecmp(v->value, "voice")) {
@@ -1733,8 +1721,7 @@ static int load_module(void)
 				jb_pckadpt = IFX_TAPI_JB_PKT_ADAPT_DATA_NO_REP;
 			} else {
 				ast_log(LOG_ERROR, "Unknown jitter buffer packet adaptation type '%s'\n", v->value);
-				ast_config_destroy(cfg);
-				return AST_MODULE_LOAD_DECLINE;
+				goto cfg_error_il;
 			}
 		} else if (!strcasecmp(v->name, "calleridtype")) {
 			ast_log(LOG_DEBUG, "Setting CID type to %s.\n", v->value);
@@ -1754,8 +1741,7 @@ static int load_module(void)
 				cid_type = IFX_TAPI_CID_STD_KPN_DTMF_FSK;
 			} else {
 				ast_log(LOG_ERROR, "Unknown caller id type '%s'\n", v->value);
-				ast_config_destroy(cfg);
-				return AST_MODULE_LOAD_DECLINE;
+				goto cfg_error_il;
 			}
 		} else if (!strcasecmp(v->name, "voiceactivitydetection")) {
 			if (!strcasecmp(v->value, "on")) {
@@ -1768,8 +1754,7 @@ static int load_module(void)
 				vad_type = IFX_TAPI_ENC_VAD_SC_ONLY;
 			} else {
 				ast_log(LOG_ERROR, "Unknown voice activity detection value '%s'\n", v->value);
-				ast_config_destroy(cfg);
-				return AST_MODULE_LOAD_DECLINE;
+				goto cfg_error_il;
 			}
 		} else if (!strcasecmp(v->name, "interdigit")) {
 			dev_ctx.interdigit_timeout = atoi(v->value);
@@ -1784,14 +1769,17 @@ static int load_module(void)
 	lantiq_create_pvts();
 
 	ast_mutex_unlock(&iflock);
+	ast_config_destroy(cfg);
+
+	if (!(sched_thread = ast_sched_thread_create())) {
+		ast_log(LOG_ERROR, "Unable to create scheduler thread\n");
+		goto load_error;
+	}
 
 	if (ast_channel_register(&lantiq_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel class 'Phone'\n");
-		ast_config_destroy(cfg);
-		unload_module();
-		return AST_MODULE_LOAD_FAILURE;
+		goto load_error_st;
 	}
-	ast_config_destroy(cfg);
 	
 	/* tapi */
 #ifdef TODO_TONES
@@ -1809,7 +1797,7 @@ static int load_module(void)
 
 	if (dev_ctx.dev_fd < 0) {
 		ast_log(LOG_ERROR, "lantiq tapi device open function failed\n");
-		return AST_MODULE_LOAD_FAILURE;
+		goto load_error_st;
 	}
 
 	for (c = 0; c < dev_ctx.channels ; c++) {
@@ -1817,18 +1805,18 @@ static int load_module(void)
 
 		if (dev_ctx.ch_fd[c] < 0) {
 			ast_log(LOG_ERROR, "lantiq tapi channel %d open function failed\n", c);
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 	}
 
 	if (lantiq_dev_firmware_download(dev_ctx.dev_fd, firmware_filename)) {
 		ast_log(LOG_ERROR, "voice firmware download failed\n");
-		return AST_MODULE_LOAD_FAILURE;
+		goto load_error_st;
 	}
 
 	if (ioctl(dev_ctx.dev_fd, IFX_TAPI_DEV_STOP, 0)) {
 		ast_log(LOG_ERROR, "IFX_TAPI_DEV_STOP ioctl failed\n");
-		return AST_MODULE_LOAD_FAILURE;
+		goto load_error_st;
 	}
 
 	memset(&dev_start, 0x0, sizeof(IFX_TAPI_DEV_START_CFG_t));
@@ -1837,7 +1825,7 @@ static int load_module(void)
 	/* Start TAPI */
 	if (ioctl(dev_ctx.dev_fd, IFX_TAPI_DEV_START, &dev_start)) {
 		ast_log(LOG_ERROR, "IFX_TAPI_DEV_START ioctl failed\n");
-		return AST_MODULE_LOAD_FAILURE;
+		goto load_error_st;
 	}
 
 	for (c = 0; c < dev_ctx.channels ; c++) {
@@ -1846,7 +1834,7 @@ static int load_module(void)
 		memset(&tone, 0, sizeof(IFX_TAPI_TONE_t));
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_TONE_TABLE_CFG_SET, &tone)) {
 			ast_log(LOG_ERROR, "IFX_TAPI_TONE_TABLE_CFG_SET %d failed\n", c);
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 #endif
 		/* ringing type */
@@ -1856,7 +1844,7 @@ static int load_module(void)
 		ringingType.nSubmode = IFX_TAPI_RING_CFG_SUBMODE_DC_RNG_TRIP_FAST;
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_RING_CFG_SET, (IFX_int32_t) &ringingType)) {
 			ast_log(LOG_ERROR, "IFX_TAPI_RING_CFG_SET failed\n");
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 
 		/* ring cadence */
@@ -1871,7 +1859,7 @@ static int load_module(void)
 
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_RING_CADENCE_HR_SET, &ringCadence)) {
 			ast_log(LOG_ERROR, "IFX_TAPI_RING_CADENCE_HR_SET failed\n");
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 
 		/* perform mapping */
@@ -1881,13 +1869,13 @@ static int load_module(void)
 
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_MAP_DATA_ADD, &map_data)) {
 			ast_log(LOG_ERROR, "IFX_TAPI_MAP_DATA_ADD %d failed\n", c);
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 
 		/* set line feed */
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_LINE_FEED_SET, IFX_TAPI_LINE_FEED_STANDBY)) {
 			ast_log(LOG_ERROR, "IFX_TAPI_LINE_FEED_SET %d failed\n", c);
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 
 		/* set volume */
@@ -1897,7 +1885,7 @@ static int load_module(void)
 
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_PHONE_VOLUME_SET, &line_vol)) {
 			ast_log(LOG_ERROR, "IFX_TAPI_PHONE_VOLUME_SET %d failed\n", c);
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 
 		/* Configure line echo canceller */
@@ -1910,7 +1898,7 @@ static int load_module(void)
 
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_WLEC_PHONE_CFG_SET, &wlec_cfg)) {
 			ast_log(LOG_ERROR, "IFX_TAPI_WLEC_PHONE_CFG_SET %d failed\n", c);
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 
 		/* Configure jitter buffer */
@@ -1925,7 +1913,7 @@ static int load_module(void)
 
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_JB_CFG_SET, &jb_cfg)) {
 			ast_log(LOG_ERROR, "IFX_TAPI_JB_CFG_SET %d failed\n", c);
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 
 		/* Configure Caller ID type */
@@ -1934,25 +1922,25 @@ static int load_module(void)
 
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_CID_CFG_SET, &cid_cfg)) {
 			ast_log(LOG_ERROR, "IIFX_TAPI_CID_CFG_SET %d failed\n", c);
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 
 		/* Configure voice activity detection */
 		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_ENC_VAD_CFG_SET, vad_type)) {
 			ast_log(LOG_ERROR, "IFX_TAPI_ENC_VAD_CFG_SET %d failed\n", c);
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 
 		/* Setup TAPI <-> internal RTP codec type mapping */
 		if (lantiq_setup_rtp(c)) {
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 
 		/* Set initial hook status */
 		iflist[c].channel_state = lantiq_get_hookstatus(c);
 		
 		if (iflist[c].channel_state == UNKNOWN) {
-			return AST_MODULE_LOAD_FAILURE;
+			goto load_error_st;
 		}
 	}
 
@@ -1962,6 +1950,23 @@ static int load_module(void)
 	restart_monitor();
 	led_on(dev_ctx.voip_led);
 	return AST_MODULE_LOAD_SUCCESS;
+
+cfg_error_il:
+	ast_mutex_unlock(&iflock);
+cfg_error:
+	ast_config_destroy(cfg);
+	return AST_MODULE_LOAD_DECLINE;
+
+load_error_st:
+	sched_thread = ast_sched_thread_destroy(sched_thread);
+load_error:
+	unload_module();
+	ast_free(iflist);
+	return AST_MODULE_LOAD_FAILURE;
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Lantiq TAPI Telephony API Support");
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Lantiq TAPI Telephony API Support",
+	.load = load_module,
+	.unload = unload_module,
+	.load_pri = AST_MODPRI_CHANNEL_DRIVER
+);
