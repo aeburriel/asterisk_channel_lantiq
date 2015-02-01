@@ -386,7 +386,7 @@ static int lantiq_play_tone(int c, int t)
 	}
 
 	if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_TONE_LOCAL_PLAY, t)) {
-		ast_log(LOG_ERROR, "IFX_TAPI_TONE_LOCAL_PLAY ioctl failed\n");
+		ast_log(LOG_DEBUG, "IFX_TAPI_TONE_LOCAL_PLAY ioctl failed\n");
 		return -1;
 	}
 
