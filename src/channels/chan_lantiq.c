@@ -1373,7 +1373,6 @@ static void * lantiq_events_monitor(void *data)
 		for (c = 0; c < dev_ctx.channels; c++) {
 			if ((fds[c + 1].revents & POLLIN) && (lantiq_dev_data_handler(c))) {
 				ast_log(LOG_ERROR, "data handler %d failed\n", c);
-				ast_mutex_unlock(&monlock);
 				break;
 			}
 		}
@@ -1404,7 +1403,7 @@ static int restart_monitor(void)
 		/* Start a new monitor */
 		if (ast_pthread_create_background(&monitor_thread, NULL, lantiq_events_monitor, NULL) < 0) {
 			ast_mutex_unlock(&monlock);
-			ast_log(LOG_WARNING, "Unable to start monitor thread.\n");
+			ast_log(LOG_ERROR, "Unable to start monitor thread.\n");
 			return -1;
 		}
 	}
