@@ -707,7 +707,7 @@ static int lantiq_conf_enc(int c, format_t formatid)
 			break;
 		case AST_FORMAT_SLINEAR16:
 			iflist[c].encoder = IFX_TAPI_COD_TYPE_LIN16_16;
-			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10; /* TAPI RTP internal buffer can only hold up to 15mS*/
 			iflist[c].rtp_payload = RTP_SLIN16;
 			break;
 		case AST_FORMAT_G722:
@@ -746,7 +746,7 @@ static int lantiq_conf_enc(int c, format_t formatid)
 
 static int ast_lantiq_write(struct ast_channel *ast, struct ast_frame *frame)
 {
-	char buf[2048];
+	char buf[512];
 	struct lantiq_pvt *pvt = ast->tech_pvt;
 	int ret = -1;
 	rtp_header_t *rtp_header = (rtp_header_t *) buf;
