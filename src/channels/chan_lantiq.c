@@ -77,8 +77,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: xxx $")
 #include <drv_tapi/drv_tapi_io.h>
 #include <drv_vmmc/vmmc_io.h>
 
-#define RTP_HEADER_LEN 12
-
 #define TAPI_AUDIO_PORT_NUM_MAX                 2
 #define TAPI_TONE_LOCALE_NONE                   0 
 #define TAPI_TONE_LOCALE_RINGING_CODE           26
@@ -122,7 +120,7 @@ static struct lantiq_pvt {
 	char dtmfbuf[AST_MAX_EXTENSION+1]; /* buffer holding dialed digits          */
 	int dtmfbuf_len;                   /* lenght of dtmfbuf                     */
 	int rtp_timestamp;                 /* timestamp for RTP packets             */
-	IFX_TAPI_COD_TYPE_t encoder;	   /* TAPI encoder in use		    */
+	int ptime;			   /* TAPI base enconder ptime		    */
 	format_t codec;			   /* Asterisk codec in use		    */
 	char rtp_payload;		   /* Internal RTP payload code in use	    */
 	uint16_t rtp_seqno;                /* Sequence nr for RTP packets           */
@@ -207,18 +205,17 @@ typedef struct rtp_header
 {
 #if defined(WORDS_BIGENDIAN)
   uint8_t version:2, padding:1, extension:1, csrc_count:4;
-#else
-  uint8_t csrc_count:4, extension:1, padding:1, version:2;
-#endif
-#if defined(WORDS_BIGENDIAN)
   uint8_t marker:1, payload_type:7;
 #else
+  uint8_t csrc_count:4, extension:1, padding:1, version:2;
   uint8_t payload_type:7, marker:1;
 #endif
   uint16_t seqno;
   uint32_t timestamp;
   uint32_t ssrc;
 } rtp_header_t;
+#define RTP_HEADER_LEN 12
+#define RTP_BUFFER_LEN 512
 /* Internal RTP payload types - standard */
 #define RTP_PCMU	0
 #define RTP_G723	4
@@ -667,56 +664,56 @@ static int lantiq_conf_enc(int c, format_t formatid)
 	switch (formatid) {
 		case AST_FORMAT_G723_1:
 #if defined G723_HIGH_RATE
-			iflist[c].encoder = IFX_TAPI_COD_TYPE_G723_63;
+			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G723_63;
 #else
-			iflist[c].encoder = IFX_TAPI_COD_TYPE_G723_53;
+			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G723_53;
 #endif
 			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_30;
 			iflist[c].rtp_payload = RTP_G723;
 			break;
 		case AST_FORMAT_G729A:
-			 iflist[c].encoder = IFX_TAPI_COD_TYPE_G729;
-			 enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20; /* native is 10 */
+			 enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G729;
+			 enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
 			 iflist[c].rtp_payload = RTP_G729;
 			 break;
 		case AST_FORMAT_ULAW:
-			iflist[c].encoder = IFX_TAPI_COD_TYPE_MLAW;
-			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_MLAW;
+			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
 			iflist[c].rtp_payload = RTP_PCMU;
 			break;
 		case AST_FORMAT_ALAW:
-			iflist[c].encoder = IFX_TAPI_COD_TYPE_ALAW;
-			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_ALAW;
+			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
 			iflist[c].rtp_payload = RTP_PCMA;
 			break;
 		case AST_FORMAT_G726:
-			iflist[c].encoder = IFX_TAPI_COD_TYPE_G726_32;
-			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20; /* native is 10 */
+			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G726_32;
+			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
 			iflist[c].rtp_payload = RTP_G726;
 			break;
 		case AST_FORMAT_ILBC:
-			/* ILBC 15.2kbps is currently unsupported by Asterisk */
-			iflist[c].encoder = IFX_TAPI_COD_TYPE_ILBC_133;
+			/* iLBC 15.2kbps is currently unsupported by Asterisk */
+			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_ILBC_133;
 			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_30;
 			iflist[c].rtp_payload = RTP_ILBC;
 			break;
 		case AST_FORMAT_SLINEAR:
-			iflist[c].encoder = IFX_TAPI_COD_TYPE_LIN16_8;
-			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_LIN16_8;
+			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
 			iflist[c].rtp_payload = RTP_SLIN8;
 			break;
 		case AST_FORMAT_SLINEAR16:
-			iflist[c].encoder = IFX_TAPI_COD_TYPE_LIN16_16;
-			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10; /* TAPI RTP internal buffer can only hold up to 15mS*/
+			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_LIN16_16;
+			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
 			iflist[c].rtp_payload = RTP_SLIN16;
 			break;
 		case AST_FORMAT_G722:
-			iflist[c].encoder = IFX_TAPI_COD_TYPE_G722_64;
+			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G722_64;
 			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
 			iflist[c].rtp_payload = RTP_G722;
 			break;
 		case AST_FORMAT_SIREN7:
-			iflist[c].encoder = IFX_TAPI_COD_TYPE_G7221_32;
+			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G7221_32;
 			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
 			iflist[c].rtp_payload = RTP_SIREN7;
 			break;
@@ -724,10 +721,38 @@ static int lantiq_conf_enc(int c, format_t formatid)
 			ast_log(LOG_ERROR, "unsupported format %llu (%s)\n", formatid, ast_getformatname(formatid));
 			return -1;
 	}
-	enc_cfg.nEncType = iflist[c].encoder;
 	iflist[c].codec = formatid;
-	ast_log(LOG_DEBUG, "Configuring encoder to use TAPI codec type %d on channel %i\n", iflist[c].encoder, c);
+	ast_log(LOG_DEBUG, "Configuring encoder to use TAPI codec type %d on channel %i\n", enc_cfg.nEncType, c);
 
+	switch (enc_cfg.nFrameLen) {
+		case IFX_TAPI_COD_LENGTH_5:
+			iflist[c].ptime = 5;
+			break;
+		case IFX_TAPI_COD_LENGTH_10:
+			iflist[c].ptime = 10;
+			break;
+		case IFX_TAPI_COD_LENGTH_11:
+			iflist[c].ptime = 11;
+			break;
+		case IFX_TAPI_COD_LENGTH_20:
+			iflist[c].ptime = 20;
+			break;
+		case IFX_TAPI_COD_LENGTH_30:
+			iflist[c].ptime = 30;
+			break;
+		case IFX_TAPI_COD_LENGTH_40:
+			iflist[c].ptime = 40;
+			break;
+		case IFX_TAPI_COD_LENGTH_50:
+			iflist[c].ptime = 50;
+			break;
+		case IFX_TAPI_COD_LENGTH_60:
+			iflist[c].ptime = 60;
+			break;
+		default:
+			ast_log(LOG_ERROR, "Unsupported TAPI ptime id %d\n", enc_cfg.nFrameLen);
+			return -1;
+	}
 	if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_ENC_CFG_SET, &enc_cfg)) {
 		ast_log(LOG_ERROR, "IFX_TAPI_ENC_CFG_SET %d failed\n", c);
 	}
@@ -746,10 +771,12 @@ static int lantiq_conf_enc(int c, format_t formatid)
 
 static int ast_lantiq_write(struct ast_channel *ast, struct ast_frame *frame)
 {
-	char buf[512];
-	struct lantiq_pvt *pvt = ast->tech_pvt;
-	int ret = -1;
+	char buf[RTP_BUFFER_LEN];
 	rtp_header_t *rtp_header = (rtp_header_t *) buf;
+	struct lantiq_pvt *pvt = ast->tech_pvt;
+	int subframes, subframe_samples, subframe_size, occupied, source_samples;
+	char *source;
+	int ret;
 
 	if(frame->frametype != AST_FRAME_VOICE) {
 		ast_log(LOG_DEBUG, "unhandled frame type\n");
@@ -766,41 +793,67 @@ static int ast_lantiq_write(struct ast_channel *ast, struct ast_frame *frame)
 		return 0;
 	}
 
-	memset(buf, 0, sizeof(rtp_header_t));
 	rtp_header->version      = 2;
 	rtp_header->padding      = 0;
 	rtp_header->extension    = 0;
 	rtp_header->csrc_count   = 0;
 	rtp_header->marker       = 0;
-	rtp_header->timestamp    = pvt->rtp_timestamp;
-	rtp_header->seqno        = pvt->rtp_seqno++;
 	rtp_header->ssrc         = 0;
 	rtp_header->payload_type = pvt->rtp_payload;
 
-	pvt->rtp_timestamp += (rtp_header->payload_type == RTP_G722 ? ast_codec_get_samples(frame) / 2 : ast_codec_get_samples(frame));	/* per RFC3551 */
+	subframes = frame->len / iflist[pvt->port_id].ptime;
+	if (subframes == 0)
+		subframes = 1;
+	/* These won't work with VBR codecs, fortunately Lantiq doesn't have them */
+	subframe_samples = frame->samples / subframes;
+	subframe_size = frame->datalen / subframes;
+	source = frame->data.ptr;
+	source_samples = 0;
 
-	memcpy(buf+RTP_HEADER_LEN, frame->data.ptr, frame->datalen);
+	while (subframes > 0) {
+		occupied = 0;
+		rtp_header->seqno        = pvt->rtp_seqno++;
+		rtp_header->timestamp    = pvt->rtp_timestamp;
 
-	ret = write(dev_ctx.ch_fd[pvt->port_id], buf, frame->datalen+RTP_HEADER_LEN);
-	if (ret <= 0) {
-		ast_debug(1, "TAPI: ast_lantiq_write(): error writing.\n");
-		return -1;
-	}
+		if( (occupied + subframe_size) > frame->samples) {
+			subframe_samples = frame->samples - source_samples;
+			subframe_size = frame->datalen - occupied;
+		}
+
+		while ((subframes > 0) && ((occupied + subframe_size) < (RTP_BUFFER_LEN - RTP_HEADER_LEN))) {
+			memcpy(&buf[RTP_HEADER_LEN + occupied], source, subframe_size);
+			occupied += subframe_size;
+			source += subframe_size;
+			source_samples += subframe_samples;
+			subframes--;
+			pvt->rtp_timestamp += (rtp_header->payload_type == RTP_G722) ? subframe_samples / 2 : subframe_samples; /* per RFC3551 */
+		}
+
+		ret = write(dev_ctx.ch_fd[pvt->port_id], buf, RTP_HEADER_LEN + occupied);
+		if (ret < 0) {
+			ast_debug(1, "TAPI: ast_lantiq_write(): error writing.\n");
+			return -1;
+		}
+		if (ret != (RTP_HEADER_LEN + occupied)) {
+			ast_log(LOG_WARNING, "Short TAPI write of %d bytes, expected %d bytes\n", ret, RTP_HEADER_LEN + occupied);
+			continue;
+		}
 
 #ifdef TODO_DEVEL_INFO
-	ast_debug(1, "ast_lantiq_write(): size: %i version: %i padding: %i extension: %i csrc_count: %i\n"
-		 "marker: %i payload_type: %s seqno: %i timestamp: %i ssrc: %i\n", 
-			 (int)ret,
-			 (int)rtp_header->version,
-			 (int)rtp_header->padding,
-			 (int)rtp_header->extension,
-			 (int)rtp_header->csrc_count,
-			 (int)rtp_header->marker,
-			 ast_codec2str(rtp_header->payload_type),
-			 (int)rtp_header->seqno,
-			 (int)rtp_header->timestamp,
-			 (int)rtp_header->ssrc);
+		ast_debug(1, "ast_lantiq_write(): size: %i version: %i padding: %i extension: %i csrc_count: %i\n"
+			 "marker: %i payload_type: %s seqno: %i timestamp: %i ssrc: %i\n",
+				 (int)ret,
+				 (int)rtp_header->version,
+				 (int)rtp_header->padding,
+				 (int)rtp_header->extension,
+				 (int)rtp_header->csrc_count,
+				 (int)rtp_header->marker,
+				 ast_codec2str(frame->subclass.codec),
+				 (int)rtp_header->seqno,
+				 (int)rtp_header->timestamp,
+				 (int)rtp_header->ssrc);
 #endif
+	}
 
 	return 0;
 }
@@ -1091,7 +1144,7 @@ static int lantiq_dev_data_handler(int c)
 				 (int)rtp->extension,
 				 (int)rtp->csrc_count,
 				 (int)rtp->marker,
-				 ast_codec2str(rtp->payload_type),
+				 ast_codec2str(frame.subclass.codec),
 				 (int)rtp->seqno,
 				 (int)rtp->timestamp,
 				 (int)rtp->ssrc);
