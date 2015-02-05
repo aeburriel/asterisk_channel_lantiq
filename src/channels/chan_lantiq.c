@@ -774,8 +774,6 @@ static int ast_lantiq_write(struct ast_channel *ast, struct ast_frame *frame)
 	char buf[RTP_BUFFER_LEN];
 	rtp_header_t *rtp_header = (rtp_header_t *) buf;
 	struct lantiq_pvt *pvt = ast->tech_pvt;
-	int subframes, subframe_samples, subframe_size, occupied;
-	char *source;
 	int ret;
 
 	if(frame->frametype != AST_FRAME_VOICE) {
@@ -801,40 +799,35 @@ static int ast_lantiq_write(struct ast_channel *ast, struct ast_frame *frame)
 	rtp_header->ssrc         = 0;
 	rtp_header->payload_type = pvt->rtp_payload;
 
-	subframes = frame->len / iflist[pvt->port_id].ptime;
-	if (subframes == 0)
-		subframes = 1;
-	/* These won't work with VBR codecs, fortunately Lantiq doesn't have them */
-	subframe_samples = frame->samples / subframes;
-	subframe_size = frame->datalen / subframes;
-	source = frame->data.ptr;
+	const int subframes = (iflist[pvt->port_id].ptime + frame->len - 1) / iflist[pvt->port_id].ptime; /* number of subframes in AST frame */
+	const int subframes_rtp = (RTP_BUFFER_LEN - RTP_HEADER_LEN) * subframes / frame->datalen; /* how many frames fit in a single RTP packet */
 
-	while (subframes > 0) {
-		occupied = 0;
+	/* By default stick to the maximum multiple of native frame length */
+	int length = subframes_rtp * frame->datalen / subframes;
+	int samples = length * frame->samples / frame->datalen;
+
+	char *head = frame->data.ptr;
+	const char *tail = frame->data.ptr + frame->datalen;
+	while (head < tail) {
 		rtp_header->seqno        = pvt->rtp_seqno++;
 		rtp_header->timestamp    = pvt->rtp_timestamp;
 
-		if( (occupied + subframe_size) > frame->samples) {
-			/* In last subframe, should only happen with bitstream codec with non multiple ptime */
-			subframe_samples %= subframe_size;
-			subframe_size %= frame->datalen;
+		if ((tail - head) < (RTP_BUFFER_LEN - RTP_HEADER_LEN)) {
+			length = tail - head;
+			samples = length * frame->samples / frame->datalen;
 		}
 
-		while ((subframes > 0) && ((occupied + subframe_size) < (RTP_BUFFER_LEN - RTP_HEADER_LEN))) {
-			memcpy(&buf[RTP_HEADER_LEN + occupied], source, subframe_size);
-			occupied += subframe_size;
-			source += subframe_size;
-			subframes--;
-			pvt->rtp_timestamp += (rtp_header->payload_type == RTP_G722) ? subframe_samples / 2 : subframe_samples; /* per RFC3551 */
-		}
+		memcpy(buf + RTP_HEADER_LEN, head, length);
+		head += length;
+		pvt->rtp_timestamp += (rtp_header->payload_type == RTP_G722) ? samples / 2 : samples; /* per RFC3551 */
 
-		ret = write(dev_ctx.ch_fd[pvt->port_id], buf, RTP_HEADER_LEN + occupied);
+		ret = write(dev_ctx.ch_fd[pvt->port_id], buf, RTP_HEADER_LEN + length);
 		if (ret < 0) {
 			ast_debug(1, "TAPI: ast_lantiq_write(): error writing.\n");
 			return -1;
 		}
-		if (ret != (RTP_HEADER_LEN + occupied)) {
-			ast_log(LOG_WARNING, "Short TAPI write of %d bytes, expected %d bytes\n", ret, RTP_HEADER_LEN + occupied);
+		if (ret != (RTP_HEADER_LEN + length)) {
+			ast_log(LOG_WARNING, "Short TAPI write of %d bytes, expected %d bytes\n", ret, RTP_HEADER_LEN + length);
 			continue;
 		}
 
