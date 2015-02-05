@@ -774,7 +774,7 @@ static int ast_lantiq_write(struct ast_channel *ast, struct ast_frame *frame)
 	char buf[RTP_BUFFER_LEN];
 	rtp_header_t *rtp_header = (rtp_header_t *) buf;
 	struct lantiq_pvt *pvt = ast->tech_pvt;
-	int subframes, subframe_samples, subframe_size, occupied, source_samples;
+	int subframes, subframe_samples, subframe_size, occupied;
 	char *source;
 	int ret;
 
@@ -808,7 +808,6 @@ static int ast_lantiq_write(struct ast_channel *ast, struct ast_frame *frame)
 	subframe_samples = frame->samples / subframes;
 	subframe_size = frame->datalen / subframes;
 	source = frame->data.ptr;
-	source_samples = 0;
 
 	while (subframes > 0) {
 		occupied = 0;
@@ -816,15 +815,15 @@ static int ast_lantiq_write(struct ast_channel *ast, struct ast_frame *frame)
 		rtp_header->timestamp    = pvt->rtp_timestamp;
 
 		if( (occupied + subframe_size) > frame->samples) {
-			subframe_samples = frame->samples - source_samples;
-			subframe_size = frame->datalen - occupied;
+			/* In last subframe, should only happen with bitstream codec with non multiple ptime */
+			subframe_samples %= subframe_size;
+			subframe_size %= frame->datalen;
 		}
 
 		while ((subframes > 0) && ((occupied + subframe_size) < (RTP_BUFFER_LEN - RTP_HEADER_LEN))) {
 			memcpy(&buf[RTP_HEADER_LEN + occupied], source, subframe_size);
 			occupied += subframe_size;
 			source += subframe_size;
-			source_samples += subframe_samples;
 			subframes--;
 			pvt->rtp_timestamp += (rtp_header->payload_type == RTP_G722) ? subframe_samples / 2 : subframe_samples; /* per RFC3551 */
 		}
