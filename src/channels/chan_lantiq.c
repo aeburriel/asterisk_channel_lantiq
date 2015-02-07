@@ -1601,8 +1601,8 @@ static int lantiq_setup_rtp(int c)
 
 	memset((char*)&rtpPTConf, '\0', sizeof(rtpPTConf));
 
-//	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_63] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_63] = AST_FORMAT_G723_1;
-//	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_53] = tpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_53] = 4;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_63] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_63] = RTP_G723;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_53] = tpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_53] = RTP_G723;
 	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G729] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G729] = RTP_G729;
 	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_MLAW] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_MLAW] = RTP_PCMU;
 	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_ALAW] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_ALAW] = RTP_PCMA;
