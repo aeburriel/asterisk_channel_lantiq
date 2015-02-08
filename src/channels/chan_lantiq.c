@@ -218,7 +218,7 @@ typedef struct rtp_header
 #define RTP_BUFFER_LEN 512
 /* Internal RTP payload types - standard */
 #define RTP_PCMU	0
-#define RTP_G723	4
+#define RTP_G723_63	4
 #define RTP_PCMA	8
 #define RTP_G722	9
 #define RTP_CN		13
@@ -230,6 +230,7 @@ typedef struct rtp_header
 #define RTP_SLIN8	103
 #define RTP_SLIN16	104
 #define RTP_SIREN7	105
+#define RTP_G723_33	106
 
 
 /* LED Control. Taken with modifications from SVD by Luca Olivetti <olivluca@gmail.com> */
@@ -665,11 +666,12 @@ static int lantiq_conf_enc(int c, format_t formatid)
 		case AST_FORMAT_G723_1:
 #if defined G723_HIGH_RATE
 			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G723_63;
+			iflist[c].rtp_payload = RTP_G723_63;
 #else
 			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G723_53;
+			iflist[c].rtp_payload = RTP_G723_53;
 #endif
 			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_30;
-			iflist[c].rtp_payload = RTP_G723;
 			break;
 		case AST_FORMAT_G729A:
 			 enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G729;
@@ -1601,8 +1603,8 @@ static int lantiq_setup_rtp(int c)
 
 	memset((char*)&rtpPTConf, '\0', sizeof(rtpPTConf));
 
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_63] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_63] = RTP_G723;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_53] = tpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_53] = RTP_G723;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_63] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_63] = RTP_G723_63;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_53] = tpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_53] = RTP_G723_53;
 	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G729] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G729] = RTP_G729;
 	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_MLAW] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_MLAW] = RTP_PCMU;
 	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_ALAW] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_ALAW] = RTP_PCMA;
