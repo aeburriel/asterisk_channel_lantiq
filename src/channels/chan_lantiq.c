@@ -160,6 +160,7 @@ static int ast_lantiq_devicestate(void *data);
 static int acf_channel_read(struct ast_channel *chan, const char *funcname, char *args, char *buf, size_t buflen);
 static void lantiq_jb_get_stats(int c);
 static int lantiq_conf_enc(int c, format_t formatid);
+static void lantiq_reset_dtmfbuf(struct lantiq_pvt *pvt);
 
 static const struct ast_channel_tech lantiq_tech = {
 	.type = "TAPI",
@@ -973,6 +974,7 @@ static int lantiq_end_dialing(int c)
 	if(pvt->owner) {
 		ast_hangup(pvt->owner);
 	}
+	lantiq_reset_dtmfbuf(pvt);
 
 	return 0;
 }
