@@ -115,9 +115,9 @@ static struct lantiq_pvt {
 	int port_id;                       /* Port number of this object, 0..n      */
 	int channel_state;
 	char context[AST_MAX_CONTEXT];     /* this port's dialplan context          */
-	char ext[AST_MAX_EXTENSION+1];     /* the extension this port is connecting */
+	char ext[AST_MAX_EXTENSION];       /* the extension this port is connecting */
 	int dial_timer;                    /* timer handle for autodial timeout     */
-	char dtmfbuf[AST_MAX_EXTENSION+1]; /* buffer holding dialed digits          */
+	char dtmfbuf[AST_MAX_EXTENSION];   /* buffer holding dialed digits          */
 	int dtmfbuf_len;                   /* lenght of dtmfbuf                     */
 	int rtp_timestamp;                 /* timestamp for RTP packets             */
 	int ptime;			   /* TAPI base enconder ptime		    */
@@ -1332,9 +1332,16 @@ static void lantiq_dev_event_digit(int c, char digit)
 
 				lantiq_dial(pvt);
 			} else {
-				pvt->dtmfbuf[pvt->dtmfbuf_len] = digit;
-				pvt->dtmfbuf_len++;
-				pvt->dtmfbuf[pvt->dtmfbuf_len] = '\0';
+				if (pvt->dtmfbuf_len < AST_MAX_EXTENSION - 1) {
+					pvt->dtmfbuf[pvt->dtmfbuf_len] = digit;
+					pvt->dtmfbuf[++pvt->dtmfbuf_len] = '\0';
+				} else {
+					/* No more room for another digit */
+					lantiq_end_dialing(c);
+					lantiq_play_tone(pvt->port_id, TAPI_TONE_LOCALE_BUSY_CODE);
+					pvt->channel_state = CALL_ENDED;
+					break;
+				}
 
 				/* setup autodial timer */
 				if (!pvt->dial_timer) {
