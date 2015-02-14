@@ -230,7 +230,7 @@ typedef struct rtp_header
 #define RTP_SLIN8	103
 #define RTP_SLIN16	104
 #define RTP_SIREN7	105
-#define RTP_G723_33	106
+#define RTP_G723_53	106
 
 
 /* LED Control. Taken with modifications from SVD by Luca Olivetti <olivluca@gmail.com> */
@@ -1604,7 +1604,7 @@ static int lantiq_setup_rtp(int c)
 	memset((char*)&rtpPTConf, '\0', sizeof(rtpPTConf));
 
 	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_63] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_63] = RTP_G723_63;
-	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_53] = tpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_53] = RTP_G723_53;
+	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G723_53] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G723_53] = RTP_G723_53;
 	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_G729] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_G729] = RTP_G729;
 	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_MLAW] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_MLAW] = RTP_PCMU;
 	rtpPTConf.nPTup[IFX_TAPI_COD_TYPE_ALAW] = rtpPTConf.nPTdown[IFX_TAPI_COD_TYPE_ALAW] = RTP_PCMA;
