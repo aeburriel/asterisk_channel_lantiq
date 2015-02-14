@@ -1243,7 +1243,7 @@ static void lantiq_dial(struct lantiq_pvt *pvt)
 
 		ast_verbose(VERBOSE_PREFIX_3 " extension exists, starting PBX %s\n", pvt->ext);
 
-		chan = lantiq_channel(AST_STATE_UP, pvt->port_id, pvt->ext+1, pvt->context, 0);
+		chan = lantiq_channel(AST_STATE_UP, pvt->port_id, pvt->ext, pvt->context, 0);
 		if (!chan) {
 			ast_log(LOG_ERROR, "couldn't create channel\n");
 			return;
