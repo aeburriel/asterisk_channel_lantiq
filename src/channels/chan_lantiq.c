@@ -119,9 +119,9 @@ static struct lantiq_pvt {
 	char dtmfbuf[AST_MAX_EXTENSION]; /* buffer holding dialed digits          */
 	int dtmfbuf_len;                 /* lenght of dtmfbuf                     */
 	int rtp_timestamp;               /* timestamp for RTP packets             */
-	int ptime;			 /* TAPI base enconder ptime		  */
-	format_t codec;			 /* Asterisk codec in use		  */
+	int ptime;			 /* Codec base ptime			  */
 	char rtp_payload;		 /* Internal RTP payload code in use	  */
+	format_t codec;			 /* Asterisk codec in use		  */
 	uint16_t rtp_seqno;              /* Sequence nr for RTP packets           */
 	uint32_t call_setup_start;       /* Start of dialling in ms               */
 	uint32_t call_setup_delay;       /* time between ^ and 1st ring in ms     */
@@ -132,7 +132,6 @@ static struct lantiq_pvt {
 	uint32_t jb_overflow;            /* Jitter buffer dropped samples         */
 	uint16_t jb_delay;               /* Jitter buffer: playout delay          */
 	uint16_t jb_invalid;             /* Jitter buffer: Nr. of invalid packets */
-
 } *iflist = NULL;
 
 static struct lantiq_ctx {
@@ -672,51 +671,61 @@ static int lantiq_conf_enc(int c, format_t formatid)
 			iflist[c].rtp_payload = RTP_G723_53;
 #endif
 			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_30;
+			iflist[c].ptime = 30;
 			break;
 		case AST_FORMAT_G729A:
 			 enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G729;
-			 enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
+			 enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			 iflist[c].ptime = 10;
 			 iflist[c].rtp_payload = RTP_G729;
 			 break;
 		case AST_FORMAT_ULAW:
 			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_MLAW;
-			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
+			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			iflist[c].ptime = 10;
 			iflist[c].rtp_payload = RTP_PCMU;
 			break;
 		case AST_FORMAT_ALAW:
 			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_ALAW;
-			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
+			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			iflist[c].ptime = 10;
 			iflist[c].rtp_payload = RTP_PCMA;
 			break;
 		case AST_FORMAT_G726:
 			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G726_32;
-			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
+			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			iflist[c].ptime = 10;
 			iflist[c].rtp_payload = RTP_G726;
 			break;
 		case AST_FORMAT_ILBC:
 			/* iLBC 15.2kbps is currently unsupported by Asterisk */
 			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_ILBC_133;
 			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_30;
+			iflist[c].ptime = 30;
 			iflist[c].rtp_payload = RTP_ILBC;
 			break;
 		case AST_FORMAT_SLINEAR:
 			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_LIN16_8;
-			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
+			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			iflist[c].ptime = 10;
 			iflist[c].rtp_payload = RTP_SLIN8;
 			break;
 		case AST_FORMAT_SLINEAR16:
 			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_LIN16_16;
 			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_10;
+			iflist[c].ptime = 10;
 			iflist[c].rtp_payload = RTP_SLIN16;
 			break;
 		case AST_FORMAT_G722:
 			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G722_64;
 			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			iflist[c].ptime = 20;
 			iflist[c].rtp_payload = RTP_G722;
 			break;
 		case AST_FORMAT_SIREN7:
 			enc_cfg.nEncType = IFX_TAPI_COD_TYPE_G7221_32;
 			enc_cfg.nFrameLen = IFX_TAPI_COD_LENGTH_20;
+			iflist[c].ptime = 20;
 			iflist[c].rtp_payload = RTP_SIREN7;
 			break;
 		default:
@@ -724,37 +733,8 @@ static int lantiq_conf_enc(int c, format_t formatid)
 			return -1;
 	}
 	iflist[c].codec = formatid;
-	ast_log(LOG_DEBUG, "Configuring encoder to use TAPI codec type %d on channel %i\n", enc_cfg.nEncType, c);
+	ast_log(LOG_DEBUG, "Configuring encoder to use TAPI codec type %d (%s) on channel %i\n", enc_cfg.nEncType, ast_getformatname(formatid), c);
 
-	switch (enc_cfg.nFrameLen) {
-		case IFX_TAPI_COD_LENGTH_5:
-			iflist[c].ptime = 5;
-			break;
-		case IFX_TAPI_COD_LENGTH_10:
-			iflist[c].ptime = 10;
-			break;
-		case IFX_TAPI_COD_LENGTH_11:
-			iflist[c].ptime = 11;
-			break;
-		case IFX_TAPI_COD_LENGTH_20:
-			iflist[c].ptime = 20;
-			break;
-		case IFX_TAPI_COD_LENGTH_30:
-			iflist[c].ptime = 30;
-			break;
-		case IFX_TAPI_COD_LENGTH_40:
-			iflist[c].ptime = 40;
-			break;
-		case IFX_TAPI_COD_LENGTH_50:
-			iflist[c].ptime = 50;
-			break;
-		case IFX_TAPI_COD_LENGTH_60:
-			iflist[c].ptime = 60;
-			break;
-		default:
-			ast_log(LOG_ERROR, "Unsupported TAPI ptime id %d\n", enc_cfg.nFrameLen);
-			return -1;
-	}
 	if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_ENC_CFG_SET, &enc_cfg)) {
 		ast_log(LOG_ERROR, "IFX_TAPI_ENC_CFG_SET %d failed\n", c);
 	}
