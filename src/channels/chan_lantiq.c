@@ -408,33 +408,33 @@ lantiq_dev_binary_buffer_create(const char *path, uint8_t **ppBuf, uint32_t *pBu
 {
 	FILE *fd;
 	struct stat file_stat;
-	int32_t status = 0;
+	int status = -1;
 
 	fd = fopen(path, "rb");
 	if (fd == NULL) {
 		ast_log(LOG_ERROR, "binary file %s open failed\n", path);
-		return -1;
+		goto on_exit;
 	}
 
 	if (stat(path, &file_stat)) {
 		ast_log(LOG_ERROR, "file %s statistics get failed\n", path);
-		return -1;
+		goto on_exit;
 	}
 
 	*ppBuf = malloc(file_stat.st_size);
 	if (*ppBuf == NULL) {
 		ast_log(LOG_ERROR, "binary file %s memory allocation failed\n", path);
-		status = -1;
 		goto on_exit;
 	}
 
-	if (fread (*ppBuf, sizeof(uint8_t), file_stat.st_size, fd) <= 0) {
+	if (fread (*ppBuf, sizeof(uint8_t), file_stat.st_size, fd) != file_stat.st_size) {
 		ast_log(LOG_ERROR, "file %s read failed\n", path);
 		status = -1;
 		goto on_exit;
 	}
 
 	*pBufSz = file_stat.st_size;
+	status = 0;
 
 on_exit:
 	if (fd != NULL)
