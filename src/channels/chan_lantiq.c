@@ -111,28 +111,27 @@ enum channel_state {
 };
 
 static struct lantiq_pvt {
-	struct ast_channel *owner;         /* Channel we belong to, possibly NULL   */
-	int port_id;                       /* Port number of this object, 0..n      */
+	struct ast_channel *owner;       /* Channel we belong to, possibly NULL   */
+	int port_id;                     /* Port number of this object, 0..n      */
 	int channel_state;
-	char context[AST_MAX_CONTEXT];     /* this port's dialplan context          */
-	char ext[AST_MAX_EXTENSION];       /* the extension this port is connecting */
-	int dial_timer;                    /* timer handle for autodial timeout     */
-	char dtmfbuf[AST_MAX_EXTENSION];   /* buffer holding dialed digits          */
-	int dtmfbuf_len;                   /* lenght of dtmfbuf                     */
-	int rtp_timestamp;                 /* timestamp for RTP packets             */
-	int ptime;			   /* TAPI base enconder ptime		    */
-	format_t codec;			   /* Asterisk codec in use		    */
-	char rtp_payload;		   /* Internal RTP payload code in use	    */
-	uint16_t rtp_seqno;                /* Sequence nr for RTP packets           */
-	uint32_t call_setup_start;         /* Start of dialling in ms               */
-	uint32_t call_setup_delay;         /* time between ^ and 1st ring in ms     */
-	uint32_t call_start;               /* time we started dialling / answered   */
-	uint32_t call_answer;              /* time the callee answered our call     */
-	uint16_t jb_size;                  /* Jitter buffer size                    */
-	uint32_t jb_underflow;             /* Jitter buffer injected samples        */
-	uint32_t jb_overflow;              /* Jitter buffer dropped samples         */
-	uint16_t jb_delay;                 /* Jitter buffer: playout delay          */
-	uint16_t jb_invalid;               /* Jitter buffer: Nr. of invalid packets */
+	char context[AST_MAX_CONTEXT];   /* this port's dialplan context          */
+	int dial_timer;                  /* timer handle for autodial timeout     */
+	char dtmfbuf[AST_MAX_EXTENSION]; /* buffer holding dialed digits          */
+	int dtmfbuf_len;                 /* lenght of dtmfbuf                     */
+	int rtp_timestamp;               /* timestamp for RTP packets             */
+	int ptime;			 /* TAPI base enconder ptime		  */
+	format_t codec;			 /* Asterisk codec in use		  */
+	char rtp_payload;		 /* Internal RTP payload code in use	  */
+	uint16_t rtp_seqno;              /* Sequence nr for RTP packets           */
+	uint32_t call_setup_start;       /* Start of dialling in ms               */
+	uint32_t call_setup_delay;       /* time between ^ and 1st ring in ms     */
+	uint32_t call_start;             /* time we started dialling / answered   */
+	uint32_t call_answer;            /* time the callee answered our call     */
+	uint16_t jb_size;                /* Jitter buffer size                    */
+	uint32_t jb_underflow;           /* Jitter buffer injected samples        */
+	uint32_t jb_overflow;            /* Jitter buffer dropped samples         */
+	uint16_t jb_delay;               /* Jitter buffer: playout delay          */
+	uint16_t jb_invalid;             /* Jitter buffer: Nr. of invalid packets */
 
 } *iflist = NULL;
 
@@ -1227,36 +1226,33 @@ static void lantiq_reset_dtmfbuf(struct lantiq_pvt *pvt)
 {
 	pvt->dtmfbuf[0] = '\0';
 	pvt->dtmfbuf_len = 0;
-	pvt->ext[0] = '\0';
 }
 
 static void lantiq_dial(struct lantiq_pvt *pvt)
 {
 	struct ast_channel *chan = NULL;
 
+	ast_mutex_lock(&iflock);
 	ast_log(LOG_DEBUG, "user want's to dial %s.\n", pvt->dtmfbuf);
 
 	if (ast_exists_extension(NULL, pvt->context, pvt->dtmfbuf, 1, NULL)) {
 		ast_debug(1, "found extension %s, dialing\n", pvt->dtmfbuf);
 
-		strcpy(pvt->ext, pvt->dtmfbuf);
+		ast_verbose(VERBOSE_PREFIX_3 " extension exists, starting PBX %s\n", pvt->dtmfbuf);
 
-		ast_verbose(VERBOSE_PREFIX_3 " extension exists, starting PBX %s\n", pvt->ext);
-
-		chan = lantiq_channel(AST_STATE_UP, pvt->port_id, pvt->ext, pvt->context, 0);
+		chan = lantiq_channel(AST_STATE_UP, pvt->port_id, pvt->dtmfbuf, pvt->context, 0);
 		if (!chan) {
 			ast_log(LOG_ERROR, "couldn't create channel\n");
-			return;
+			goto bailout;
 		}
 		chan->tech_pvt = pvt;
 		pvt->owner = chan;
 
-		strcpy(chan->exten, pvt->ext);
 		ast_setstate(chan, AST_STATE_RING);
 		pvt->channel_state = INCALL;
 
 		pvt->call_setup_start = now();
-		pvt->call_start = epoch();;
+		pvt->call_start = epoch();
 
 		if (ast_pbx_start(chan)) {
 			ast_log(LOG_WARNING, " unable to start PBX on %s\n", chan->name);
@@ -1269,6 +1265,8 @@ static void lantiq_dial(struct lantiq_pvt *pvt)
 	}
 	
 	lantiq_reset_dtmfbuf(pvt);
+bailout:
+	ast_mutex_unlock(&iflock);
 }
 
 static int lantiq_event_dial_timeout(const void* data)
@@ -1312,10 +1310,8 @@ static void lantiq_dev_event_digit(int c, char digit)
 
 	switch (pvt->channel_state) {
 		case INCALL:
-			{
-				lantiq_send_digit(c, digit);
-				break;
-			}
+			lantiq_send_digit(c, digit);
+			break;
 		case OFFHOOK:  
 			pvt->channel_state = DIALING;
 
@@ -1330,7 +1326,9 @@ static void lantiq_dev_event_digit(int c, char digit)
 					pvt->dial_timer = 0;
 				}
 
+				ast_mutex_unlock(&iflock);
 				lantiq_dial(pvt);
+				return;
 			} else {
 				if (pvt->dtmfbuf_len < AST_MAX_EXTENSION - 1) {
 					pvt->dtmfbuf[pvt->dtmfbuf_len] = digit;
@@ -1562,7 +1560,6 @@ static struct lantiq_pvt *lantiq_init_pvt(struct lantiq_pvt *pvt)
 		pvt->port_id = -1;
 		pvt->channel_state = UNKNOWN;
 		pvt->context[0] = '\0';
-		pvt->ext[0] = '\0';
 		pvt->dial_timer = 0;
 		pvt->dtmfbuf[0] = '\0';
 		pvt->dtmfbuf_len = 0;
