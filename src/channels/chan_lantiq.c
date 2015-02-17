@@ -88,6 +88,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: xxx $")
 #define LANTIQ_CONTEXT_PREFIX "lantiq"
 #define DEFAULT_INTERDIGIT_TIMEOUT 2000
 #define G723_HIGH_RATE	1
+#define LED_NAME_LENGTH 32
 
 static const char config[] = "lantiq.conf";
 
@@ -138,10 +139,10 @@ static struct lantiq_ctx {
 		int dev_fd;
 		int channels;
 		int ch_fd[TAPI_AUDIO_PORT_NUM_MAX];
-		char *voip_led;                         /* VOIP LED name */
-                char *ch_led[TAPI_AUDIO_PORT_NUM_MAX];  /* FXS LED names */
+		char voip_led[LED_NAME_LENGTH];                        /* VOIP LED name */
+		char ch_led[TAPI_AUDIO_PORT_NUM_MAX][LED_NAME_LENGTH]; /* FXS LED names */
                 int interdigit_timeout; /* Timeout in ms between dialed digits */
-} dev_ctx = {.voip_led = "voice", .ch_led = {"fxs1", "fxs2"}};
+} dev_ctx;
 
 static int ast_digit_begin(struct ast_channel *ast, char digit);
 static int ast_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
@@ -1845,6 +1846,7 @@ static int load_module(void)
 		goto load_error_st;
 	}
 
+	snprintf(dev_ctx.voip_led, LED_NAME_LENGTH, "voice");
 	for (c = 0; c < dev_ctx.channels ; c++) {
 		dev_ctx.ch_fd[c] = lantiq_dev_open(base_path, c + 1);
 
@@ -1852,6 +1854,7 @@ static int load_module(void)
 			ast_log(LOG_ERROR, "lantiq TAPI channel %d open function failed\n", c);
 			goto load_error_st;
 		}
+		snprintf(dev_ctx.ch_led[c], LED_NAME_LENGTH, "fxs%d", c + 1);
 	}
 
 	if (lantiq_dev_firmware_download(dev_ctx.dev_fd, firmware_filename)) {
