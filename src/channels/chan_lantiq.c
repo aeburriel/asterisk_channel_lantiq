@@ -1833,6 +1833,7 @@ static int load_module(void)
 #endif
 	IFX_TAPI_DEV_START_CFG_t dev_start;
 	IFX_TAPI_MAP_DATA_t map_data;
+	IFX_TAPI_LINE_TYPE_CFG_t line_type;
 	IFX_TAPI_LINE_VOLUME_t line_vol;
 	IFX_TAPI_WLEC_CFG_t wlec_cfg;
 	IFX_TAPI_JB_CFG_t jb_cfg;
@@ -1877,6 +1878,14 @@ static int load_module(void)
 	}
 
 	for (c = 0; c < dev_ctx.channels ; c++) {
+		/* We're a FXS and want to switch between narrow & wide band automatically */
+		memset(&line_type, 0, sizeof(IFX_TAPI_LINE_TYPE_CFG_t));
+		line_type.lineType = IFX_TAPI_LINE_TYPE_FXS_AUTO;
+		if (ioctl(dev_ctx.ch_fd[c], IFX_TAPI_LINE_TYPE_SET, &line_type)) {
+			ast_log(LOG_ERROR, "IFX_TAPI_LINE_TYPE_SET %d failed\n", c);
+			goto load_error_st;
+		}
+
 		/* tones */
 #ifdef TODO_TONES
 		memset(&tone, 0, sizeof(IFX_TAPI_TONE_t));
